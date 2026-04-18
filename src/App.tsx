@@ -42,6 +42,8 @@ import { GoogleGenAI } from "@google/genai";
 import { DecisionState, AttachmentStyle, MonteCarloResult, SensitivityResult, DomainScore } from './types.ts';
 import { INITIAL_WHETHER_FACTORS, DARWIN_QUOTES, DOMAINS, ATTACH_MATRIX, RISK_FACTORS, createEmptyCandidate } from './constants.ts';
 import { computeDomainScores, computeWeightedCompatibility, runMonteCarlo, runSensitivity } from './engine.ts';
+import { toJpeg } from 'html-to-image';
+import { jsPDF } from 'jspdf';
 
 const aiOptions = process.env.GEMINI_API_KEY ? { apiKey: process.env.GEMINI_API_KEY } : undefined;
 const ai = aiOptions ? new GoogleGenAI(aiOptions) : null;
@@ -66,6 +68,51 @@ export default function App() {
   const [state, setState] = useState<DecisionState>(INITIAL_STATE);
   const [aiInsight, setAiInsight] = useState<string>('');
   const [loadingAi, setLoadingAi] = useState(false);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+
+  const downloadPDF = async () => {
+    setPdfError(null);
+    const element = document.getElementById('pdf-report-content');
+    if (!element) {
+        setPdfError("Report content area not found.");
+        return;
+    }
+    
+    setIsGeneratingPdf(true);
+    
+    // Give UI time to update loading state before thread blocks
+    await new Promise(r => setTimeout(r, 100));
+    
+    try {
+      const dataUrl = await toJpeg(element, { 
+        quality: 0.95,
+        backgroundColor: '#f4ecd8', // --color-parchment
+        filter: (node) => {
+            // Filter out ignored elements
+            if (node instanceof HTMLElement && node.dataset.html2canvasIgnore === "true") {
+                return false;
+            }
+            return true;
+        }
+      });
+      
+      const pdf = new jsPDF({
+        orientation: element.offsetWidth > element.offsetHeight ? 'landscape' : 'portrait',
+        unit: 'px',
+        format: [element.offsetWidth, element.offsetHeight]
+      });
+      
+      pdf.addImage(dataUrl, 'JPEG', 0, 0, element.offsetWidth, element.offsetHeight);
+      const cleanName = activeCandidate.name.replace(/[^a-zA-Z0-9]/g, '_');
+      pdf.save(`Historical_Report_${cleanName}.pdf`);
+    } catch (err: any) {
+      console.error('Error generating PDF:', err);
+      setPdfError(err?.message || "An unknown error occurred during document generation.");
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
 
   // Persistence
   useEffect(() => {
@@ -280,6 +327,11 @@ export default function App() {
                         <p className="font-mono text-xs uppercase tracking-[0.5em] opacity-40 italic">Historical Net Happiness Calculus</p>
                     </div>
 
+                    <div className="bg-sepia/5 border-l-2 border-sepia p-4 -mt-4 text-sm italic flex gap-3 max-w-4xl mx-auto items-start">
+                        <Info className="size-5 shrink-0 mt-0.5" />
+                        <p>Assess your baseline desire and readiness for marriage as an institution (regardless of the candidate). For the Journal Entry Weights out of a baseline 0, slide right (+10) if a factor adds deep value to your life, or left (-10) if it actively detracts from your happiness.</p>
+                    </div>
+
                     <div className="grid lg:grid-cols-2 gap-12">
                         <div className="space-y-4">
                             <h3 className="font-mono text-[10px] uppercase tracking-widest opacity-30 mb-6">Original Journal Entry Weights</h3>
@@ -305,24 +357,31 @@ export default function App() {
                             ))}
                         </div>
                         <div className="space-y-8 h-fit lg:sticky lg:top-24">
-                            <div className="scientific-card border-none bg-sepia text-parchment p-12 text-center">
+                            <div className="scientific-card border-none bg-sepia text-parchment p-12 text-center pointer-events-none">
                                 <h3 className="font-mono text-[10px] uppercase tracking-[0.3em] mb-4 opacity-70">Calculated Propensity</h3>
                                 <div className="text-8xl font-black mb-4">{(darwinUtility * 10).toFixed(0)}%</div>
-                                <p className="italic opacity-80 text-lg">"{darwinUtility > 2 ? 'Darwin noted: Marry—Marry—Marry Q.E.D.' : darwinUtility < -2 ? 'Better to be a solitary philosopher than a weary parent.' : 'The natural scales of desire are in equilibrium.'}"</p>
+                                <p className="italic opacity-80 text-lg mb-2">"{darwinUtility > 2 ? 'Darwin noted: Marry—Marry—Marry Q.E.D.' : darwinUtility < -2 ? 'Better to be a solitary philosopher than a weary parent.' : 'The natural scales of desire are in equilibrium.'}"</p>
+                                <p className="text-[10px] font-mono tracking-widest uppercase opacity-40 mt-6">*(Auto-calculated threshold based on your Journal Weights)*</p>
                             </div>
                             <div className="scientific-card bg-white/60 p-8">
-                                <h3 className="font-mono text-[10px] uppercase tracking-widest mb-6 opacity-40">System Readiness Sliders</h3>
+                                <h3 className="font-mono text-[10px] uppercase tracking-widest mb-4 opacity-40">System Readiness Sliders</h3>
+                                <div className="bg-sepia/5 border-l-2 border-sepia p-3 mb-6 text-xs italic opacity-80">
+                                    Self-audit your basal life stability. Low scores indicate external environmental stressors (like financial instability or lack of social support) that may artificially depress your baseline capacity for a successful marriage right now, regardless of the partner.
+                                </div>
                                 <div className="space-y-6">
                                     {state.readinessFactors.map(r => (
                                         <div key={r.id} className="space-y-2">
-                                            <div className="flex justify-between text-xs font-bold font-mono">
-                                                <span>{r.label}</span>
-                                                <span>{r.score}/10</span>
+                                            <div className="flex justify-between items-center text-[10px] uppercase font-mono mb-1">
+                                                <span className="font-bold opacity-60">{r.label}</span>
+                                                <span className="font-bold text-sepia bg-sepia/5 px-2 py-0.5 rounded">{r.score}/10</span>
                                             </div>
-                                            <input type="range" min="0" max="10" value={r.score} onChange={e => {
+                                            <input type="range" min="0" max="10" step="1" value={r.score} onChange={e => {
                                                 const newR = state.readinessFactors.map(x => x.id === r.id ? { ...x, score: parseInt(e.target.value) } : x);
                                                 updateNestedState('readinessFactors', newR);
                                             }} className="w-full opacity-60 hover:opacity-100 transition-opacity" />
+                                            <div className="flex justify-between text-[8px] font-mono opacity-30 px-1">
+                                                <span>0</span><span>10</span>
+                                            </div>
                                         </div>
                                     ))}
                                 </div>
@@ -369,7 +428,7 @@ export default function App() {
                     <div className="grid lg:grid-cols-2 gap-12">
                         <div className="space-y-8">
                             <div className="scientific-card bg-white/50">
-                                <div className="flex items-center justify-between mb-6">
+                                <div className="flex items-center justify-between mb-4">
                                     <h3 className="text-lg font-bold flex items-center gap-2">
                                         <Dna className="size-5 text-sepia" /> Domain Assessments
                                     </h3>
@@ -380,6 +439,9 @@ export default function App() {
                                         className="bg-transparent border-b border-sepia/30 font-bold focus:outline-none focus:border-sepia text-right w-48 text-sm"
                                     />
                                 </div>
+                                <div className="bg-sepia/5 border-l-2 border-sepia p-3 mb-6 text-xs italic opacity-80">
+                                    Rate yourself (global baseline) and your perception of the active candidate's capabilities from 0 (Poor) to 10 (Exceptional) across these key psycho-social domains.
+                                </div>
                                 <div className="space-y-8">
                                     {DOMAINS.map(d => (
                                         <div key={d.id} className="space-y-4">
@@ -389,12 +451,24 @@ export default function App() {
                                             </div>
                                             <div className="grid grid-cols-2 gap-6">
                                                 <div className="space-y-1">
-                                                    <label className="text-[9px] uppercase font-mono opacity-40">Self Rating (Global)</label>
-                                                    <input type="range" min="0" max="10" value={state.selfRatings[d.id]} onChange={e => updateNestedState(`selfRatings.${d.id}`, parseInt(e.target.value))} className="w-full" />
+                                                    <div className="flex justify-between items-center text-[9px] uppercase font-mono mb-1">
+                                                        <label className="opacity-50">Self Rating</label>
+                                                        <span className="font-bold text-sepia bg-sepia/5 px-1">{state.selfRatings[d.id] || 0}/10</span>
+                                                    </div>
+                                                    <input type="range" min="0" max="10" step="1" value={state.selfRatings[d.id] || 0} onChange={e => updateNestedState(`selfRatings.${d.id}`, parseInt(e.target.value))} className="w-full" />
+                                                    <div className="flex justify-between text-[8px] font-mono opacity-30 px-1 mt-1">
+                                                        <span>0</span><span>5</span><span>10</span>
+                                                    </div>
                                                 </div>
                                                 <div className="space-y-1">
-                                                    <label className="text-[9px] uppercase font-mono opacity-40">{activeCandidate.name} Rating</label>
-                                                    <input type="range" min="0" max="10" value={activeCandidate.partnerRatings[d.id]} onChange={e => updateCandidateState(`partnerRatings.${d.id}`, parseInt(e.target.value))} className="w-full" />
+                                                    <div className="flex justify-between items-center text-[9px] uppercase font-mono mb-1">
+                                                        <label className="opacity-50 truncate mr-2" title={`${activeCandidate.name} Rating`}>{activeCandidate.name}</label>
+                                                        <span className="font-bold text-sepia bg-sepia/5 px-1">{activeCandidate.partnerRatings[d.id] || 0}/10</span>
+                                                    </div>
+                                                    <input type="range" min="0" max="10" step="1" value={activeCandidate.partnerRatings[d.id] || 0} onChange={e => updateCandidateState(`partnerRatings.${d.id}`, parseInt(e.target.value))} className="w-full" />
+                                                    <div className="flex justify-between text-[8px] font-mono opacity-30 px-1 mt-1">
+                                                        <span>0</span><span>5</span><span>10</span>
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
@@ -403,25 +477,35 @@ export default function App() {
                             </div>
 
                             <div className="scientific-card bg-emerald-700/5 border-emerald-700/20">
-                                <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
+                                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                                     <ShieldCheck className="size-5 text-emerald-800" /> Gottman Risk Mitigation
                                 </h3>
+                                <div className="bg-emerald-900/5 border-l-2 border-emerald-600 p-3 mb-6 text-xs italic opacity-80 text-emerald-900">
+                                    These variables predict rupture with up to 94% accuracy. What is your estimated ratio of positive to negative interactions overall? How often does the candidate exhibit the "Four Horsemen" in deep conflict (0=Never, 10=Constantly)?
+                                </div>
                                 <div className="space-y-8">
                                     <div className="space-y-2">
                                         <div className="flex justify-between text-xs font-mono">
                                             <span>Pos:Neg interaction Ratio</span>
-                                            <span className="font-bold">{activeCandidate.interactionRatio}:1</span>
+                                            <span className="font-bold bg-emerald-700/10 text-emerald-800 px-2 py-0.5 rounded">{activeCandidate.interactionRatio}:1</span>
                                         </div>
                                         <input type="range" min="0" max="20" step="0.5" value={activeCandidate.interactionRatio} onChange={e => updateCandidateState('interactionRatio', parseFloat(e.target.value))} className="w-full" />
-                                        <p className="text-[10px] italic opacity-50">Gottman Baseline: 5:1 for stability, 1:1 for dissolution.</p>
+                                        <div className="flex justify-between text-[8px] font-mono opacity-30 px-1 mt-1">
+                                            <span>0</span><span>5 (Baseline)</span><span>20</span>
+                                        </div>
+                                        <p className="text-[10px] italic opacity-50 pt-2">Gottman Baseline: 5:1 for stability, 1:1 for dissolution.</p>
                                     </div>
                                     <div className="grid grid-cols-2 gap-x-8 gap-y-6">
                                         {Object.entries(activeCandidate.horsemen).map(([key, val]) => (
                                             <div key={key} className="space-y-1">
-                                                <label className="text-[10px] uppercase font-mono opacity-60 flex justify-between">
-                                                    {key} <span>{key === 'contempt' ? '2.5x weight' : ''}</span>
-                                                </label>
-                                                <input type="range" min="0" max="10" value={val as number} onChange={e => updateCandidateState(`horsemen.${key}`, parseInt(e.target.value))} className="w-full accent-sepia" />
+                                                <div className="text-[10px] uppercase font-mono opacity-60 flex justify-between items-center mb-1">
+                                                    <span>{key} <span className="opacity-50">{key === 'contempt' ? '(2.5x)' : ''}</span></span>
+                                                    <span className="font-bold text-sepia bg-sepia/5 px-1">{val as number}/10</span>
+                                                </div>
+                                                <input type="range" min="0" max="10" step="1" value={val as number} onChange={e => updateCandidateState(`horsemen.${key}`, parseInt(e.target.value))} className="w-full accent-sepia" />
+                                                <div className="flex justify-between text-[8px] font-mono opacity-30 px-1 mt-1">
+                                                    <span>0</span><span>5</span><span>10</span>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
@@ -430,8 +514,9 @@ export default function App() {
                         </div>
 
                         <div className="space-y-8 h-fit lg:sticky lg:top-24">
-                            <div className="scientific-card flex flex-col items-center">
-                                <h3 className="font-mono text-[10px] uppercase tracking-widest mb-8 opacity-40">Dynamic Compatibility Map</h3>
+                            <div className="scientific-card flex flex-col items-center pointer-events-none">
+                                <h3 className="font-mono text-[10px] uppercase tracking-widest mb-4 opacity-40">Dynamic Compatibility Map</h3>
+                                <p className="text-[10px] italic opacity-50 mb-8 max-w-xs text-center">Auto-charted radar depicting the overlap of psycho-social capabilities. (Read-only)</p>
                                 <div className="w-full aspect-square max-w-[400px]">
                                     <ResponsiveContainer width="100%" height="100%">
                                         <RadarChart data={domainScores}>
@@ -444,7 +529,10 @@ export default function App() {
                             </div>
 
                             <div className="scientific-card bg-white/80">
-                                <h3 className="font-mono text-[10px] uppercase tracking-widest mb-6 opacity-40">Attachment Compatibility Matrix</h3>
+                                <h3 className="font-mono text-[10px] uppercase tracking-widest mb-4 opacity-40">Attachment Compatibility Matrix</h3>
+                                <div className="bg-sepia/5 border-l-2 border-sepia p-3 mb-6 text-xs italic opacity-80 mt-2">
+                                    Bowlby and Ainsworth's Attachment Theory models long-term partnership volatility. Select the predominant relational mechanism for you both based on how you handle intimacy vs. independence.
+                                </div>
                                 <div className="grid grid-cols-2 gap-8">
                                     <div className="space-y-2">
                                         <label className="text-[10px] uppercase font-mono opacity-50 block text-center">Your Style</label>
@@ -475,9 +563,9 @@ export default function App() {
             )}
 
             {activeTab === 'results' && (
-                <motion.div key="results" initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} className="space-y-12 pb-32">
+                <motion.div key="results" id="pdf-report-content" initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} className="space-y-12 pb-32">
                     
-                    <div className="flex gap-4 items-center justify-center border-b border-sepia/10 pb-4 mb-8">
+                    <div data-html2canvas-ignore="true" className="flex gap-4 items-center justify-center border-b border-sepia/10 pb-4 mb-8">
                         <span className="text-[10px] uppercase font-mono opacity-50">Evaluating:</span>
                         {state.candidates.map(cand => (
                             <button 
@@ -505,7 +593,7 @@ export default function App() {
                         </div>
                         <div className="scientific-card bg-white/80 p-12 flex flex-col items-center justify-center text-center">
                             <h3 className="font-mono text-[10px] uppercase tracking-widest mb-6 opacity-40">Confidence Interval (95%)</h3>
-                            <div className="w-full h-24 relative flex items-center justify-center">
+                            <div className="w-full h-24 relative flex items-center justify-center pointer-events-none">
                                 <div className="w-full h-0.5 bg-sepia/20 absolute"></div>
                                 <div className="h-full w-0.5 bg-sepia/20 absolute left-0"></div>
                                 <div className="h-full w-0.5 bg-sepia/20 absolute right-0"></div>
@@ -517,6 +605,7 @@ export default function App() {
                                 </div>
                             </div>
                             <p className="text-[10px] uppercase font-mono tracking-widest mt-8 opacity-40">Uncertainty Metric: {monteCarlo.width.toFixed(1)} Pts</p>
+                            <p className="text-xs italic mt-2 px-4 opacity-70">*(Auto-calculated plot—cannot be moved manually)*</p>
                             <p className="text-xs italic mt-4 px-4">{monteCarlo.width < 15 ? 'Narrow width indicates high observational reliability.' : 'Wide interval suggesting high subjective uncertainty.'}</p>
                         </div>
                     </div>
@@ -524,7 +613,7 @@ export default function App() {
                     <div className="grid lg:grid-cols-2 gap-12">
                         <div className="scientific-card">
                             <h3 className="text-lg font-bold mb-8 flex items-center gap-3"><TrendingDown className="size-5 text-sepia" /> Sensitivity Analysis (Weight Perturbation)</h3>
-                            <div className="space-y-6">
+                            <div className="space-y-6 pointer-events-none">
                                 {sensitivity.map(s => (
                                     <div key={s.domain} className="space-y-1">
                                         <div className="flex justify-between text-[10px] uppercase font-mono opacity-60">
@@ -537,11 +626,15 @@ export default function App() {
                                     </div>
                                 ))}
                             </div>
-                            <p className="text-[10px] italic opacity-40 mt-8">Impact of increasing domain weight by 20% on final compatibility score.</p>
+                            <p className="text-[10px] italic opacity-40 mt-8">Impact of artificially increasing domain weight by 20% on final compatibility score.</p>
+                            <p className="text-xs italic mt-2 opacity-70">*(Auto-generated bars—cannot be moved manually)*</p>
                         </div>
 
                         <div className="scientific-card">
-                            <h3 className="text-lg font-bold mb-8 flex items-center gap-3 uppercase tracking-tighter"><AlertTriangle className="size-5 text-red-700" /> Longitudinal Risk Flags</h3>
+                            <h3 className="text-lg font-bold mb-4 flex items-center gap-3 uppercase tracking-tighter"><AlertTriangle className="size-5 text-red-700" /> Longitudinal Risk Flags</h3>
+                            <div className="bg-red-900/5 border-l-2 border-red-600 p-3 mb-6 text-xs italic opacity-80 text-red-900">
+                                Toggle any observed long-term friction points. These deduct heavy fixed weight from the baseline compatibility score according to statistical dissolution likelihoods.
+                            </div>
                             {RISK_FACTORS.map(r => (
                                 <button key={r.id} onClick={() => {
                                     const next = activeCandidate.activeRisks.includes(r.id) ? activeCandidate.activeRisks.filter(id => id !== r.id) : [...activeCandidate.activeRisks, r.id];
@@ -585,22 +678,31 @@ export default function App() {
                       )}
                     </div>
 
-                    <div className="flex flex-col sm:flex-row items-center justify-center gap-6 mt-16 pt-8 border-t border-sepia/10">
-                        <button 
-                            onClick={() => window.print()}
-                            className="bg-white border border-sepia/20 text-sepia px-8 py-4 font-bold uppercase tracking-widest text-xs flex items-center gap-3 hover:bg-sepia/5 transition-all shadow-sm rounded-sm"
-                        >
-                            <ScrollText className="size-4" /> Download Report
-                        </button>
-                        <button 
-                            onClick={() => {
-                                localStorage.removeItem('scientific-marriage-engine');
-                                window.location.reload();
-                            }}
-                            className="bg-transparent text-sepia/50 hover:text-sepia px-8 py-4 font-bold uppercase tracking-widest text-xs flex items-center gap-3 transition-all"
-                        >
-                            <RefreshCcw className="size-4" /> Reset Laboratory
-                        </button>
+                    <div data-html2canvas-ignore="true" className="flex flex-col items-center justify-center mt-16 pt-8 border-t border-sepia/10">
+                        {pdfError && (
+                            <div className="mb-4 bg-red-900/10 border-l-2 border-red-600 p-3 text-xs text-red-800 max-w-md text-center">
+                                Error framing document: {pdfError}
+                            </div>
+                        )}
+                        <div className="flex flex-col sm:flex-row items-center gap-6">
+                            <button 
+                                onClick={downloadPDF}
+                                disabled={isGeneratingPdf}
+                                className="bg-white border border-sepia/20 text-sepia px-8 py-4 font-bold uppercase tracking-widest text-xs flex items-center gap-3 hover:bg-sepia/5 transition-all shadow-sm rounded-sm disabled:opacity-50"
+                            >
+                                {isGeneratingPdf ? <RefreshCcw className="size-4 animate-spin" /> : <ScrollText className="size-4" />}
+                                {isGeneratingPdf ? 'Generating PDF...' : 'Download Report'}
+                            </button>
+                            <button 
+                                onClick={() => {
+                                    localStorage.removeItem('scientific-marriage-engine');
+                                    window.location.reload();
+                                }}
+                                className="bg-transparent text-sepia/50 hover:text-sepia px-8 py-4 font-bold uppercase tracking-widest text-xs flex items-center gap-3 transition-all"
+                            >
+                                <RefreshCcw className="size-4" /> Reset Laboratory
+                            </button>
+                        </div>
                     </div>
                 </motion.div>
             )}
