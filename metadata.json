@@ -1,0 +1,9 @@
+{
+  "name": "Darwin's Marriage Lab",
+  "description": "A scientific decision-making tool inspired by Charles Darwin's journal, using modern algorithms to decide whether and who to marry.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "AI_CONSULTATION",
+    "DATA_VISUALIZATION"
+  ]
+}

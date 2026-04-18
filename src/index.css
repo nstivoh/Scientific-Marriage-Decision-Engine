@@ -1,0 +1,37 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --color-parchment: #f4ecd8;
+  --color-ink: #1a1a1a;
+  --color-sepia: #704214;
+  --font-serif: "Cormorant Garamond", serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+@layer base {
+  body {
+    @apply bg-parchment text-ink font-serif;
+    background-image: url("https://www.transparenttextures.com/patterns/paper-fibers.png");
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-bold tracking-tight text-sepia;
+  }
+}
+
+.scientific-card {
+  @apply border border-sepia/20 bg-white/40 backdrop-blur-sm p-6 rounded-sm shadow-sm transition-all duration-300;
+  box-shadow: 2px 2px 0px rgba(112, 66, 20, 0.1);
+}
+
+.scientific-card:hover {
+  @apply shadow-md border-sepia/40;
+}
+
+input[type="range"] {
+  @apply accent-sepia cursor-pointer;
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500;1,600;1,700&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap');
+
