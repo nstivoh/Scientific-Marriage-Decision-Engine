@@ -34,23 +34,28 @@ export interface RiskFactor {
   active: boolean;
 }
 
-export interface DecisionState {
-  whetherFactors: WeightedFactor[];
-  readinessFactors: WeightedFactor[];
-  
-  selfRatings: Record<string, number>;
+export interface CandidateProfile {
+  id: string;
+  name: string;
   partnerRatings: Record<string, number>;
-  
-  interactionRatio: number; // Gottman 5:1
-  myAttachment: AttachmentStyle;
+  interactionRatio: number;
   partnerAttachment: AttachmentStyle;
-  
   horsemen: {
     criticism: number;
     contempt: number;
     defensiveness: number;
     stonewalling: number;
   };
+  activeRisks: string[];
+}
 
-  activeRisks: string[]; // IDs
+export interface DecisionState {
+  whetherFactors: WeightedFactor[];
+  readinessFactors: WeightedFactor[];
+  
+  selfRatings: Record<string, number>;
+  myAttachment: AttachmentStyle;
+  
+  candidates: CandidateProfile[];
+  activeCandidateId: string;
 }

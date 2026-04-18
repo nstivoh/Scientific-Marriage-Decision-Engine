@@ -38,3 +38,15 @@ export const INITIAL_WHETHER_FACTORS: WeightedFactor[] = [
   { id: 'intellect', label: 'Intellectual Growth', weight: 6, score: 0 },
   { id: 'conversation', label: 'Social Conversation', weight: 4, score: 0 },
 ];
+
+export function createEmptyCandidate(id: string, name: string) {
+  return {
+    id,
+    name,
+    partnerRatings: DOMAINS.reduce((acc, d) => ({ ...acc, [d.id]: 7 }), {}),
+    interactionRatio: 5,
+    partnerAttachment: 'secure' as AttachmentStyle,
+    horsemen: { criticism: 2, contempt: 0, defensiveness: 1, stonewalling: 1 },
+    activeRisks: []
+  };
+}

@@ -40,10 +40,13 @@ import {
 } from 'recharts';
 import { GoogleGenAI } from "@google/genai";
 import { DecisionState, AttachmentStyle, MonteCarloResult, SensitivityResult, DomainScore } from './types.ts';
-import { INITIAL_WHETHER_FACTORS, DARWIN_QUOTES, DOMAINS, ATTACH_MATRIX, RISK_FACTORS } from './constants.ts';
+import { INITIAL_WHETHER_FACTORS, DARWIN_QUOTES, DOMAINS, ATTACH_MATRIX, RISK_FACTORS, createEmptyCandidate } from './constants.ts';
 import { computeDomainScores, computeWeightedCompatibility, runMonteCarlo, runSensitivity } from './engine.ts';
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const aiOptions = process.env.GEMINI_API_KEY ? { apiKey: process.env.GEMINI_API_KEY } : undefined;
+const ai = aiOptions ? new GoogleGenAI(aiOptions) : null;
+
+const initialCandidate = createEmptyCandidate('c1', 'Candidate A');
 
 const INITIAL_STATE: DecisionState = {
   whetherFactors: INITIAL_WHETHER_FACTORS,
@@ -53,17 +56,9 @@ const INITIAL_STATE: DecisionState = {
     { id: 'rsocial', label: 'Social Support Network', weight: 5, score: 5 },
   ],
   selfRatings: DOMAINS.reduce((acc, d) => ({ ...acc, [d.id]: 7 }), {}),
-  partnerRatings: DOMAINS.reduce((acc, d) => ({ ...acc, [d.id]: 7 }), {}),
-  interactionRatio: 5, // Gottman baseline
   myAttachment: 'secure',
-  partnerAttachment: 'secure',
-  horsemen: {
-    criticism: 2,
-    contempt: 0,
-    defensiveness: 1,
-    stonewalling: 1,
-  },
-  activeRisks: []
+  candidates: [initialCandidate],
+  activeCandidateId: 'c1'
 };
 
 export default function App() {
@@ -89,10 +84,14 @@ export default function App() {
     localStorage.setItem('scientific-marriage-engine', JSON.stringify(state));
   }, [state]);
 
-  const domainScores = useMemo(() => computeDomainScores(state), [state]);
-  const compatibility = useMemo(() => computeWeightedCompatibility(domainScores, state), [domainScores, state]);
-  const monteCarlo = useMemo(() => runMonteCarlo(state), [state]);
-  const sensitivity = useMemo(() => runSensitivity(state), [state]);
+  const activeCandidate = useMemo(() => {
+    return state.candidates.find(c => c.id === state.activeCandidateId) || state.candidates[0];
+  }, [state.candidates, state.activeCandidateId]);
+
+  const domainScores = useMemo(() => computeDomainScores(state, activeCandidate), [state, activeCandidate]);
+  const compatibility = useMemo(() => computeWeightedCompatibility(domainScores, state, activeCandidate), [domainScores, state, activeCandidate]);
+  const monteCarlo = useMemo(() => runMonteCarlo(state, activeCandidate), [state, activeCandidate]);
+  const sensitivity = useMemo(() => runSensitivity(state, activeCandidate), [state, activeCandidate]);
 
   const darwinUtility = useMemo(() => {
     const totalW = state.whetherFactors.reduce((acc, f) => acc + f.weight, 0);
@@ -112,20 +111,25 @@ export default function App() {
   }, [compatibility, monteCarlo.width, darwinUtility]);
 
   const consultDarwin = async () => {
+    if (!ai) {
+      setAiInsight("Alas, the API telegraph wires are unconnected! A valid Gemini API key is required to summon the spirit of science.");
+      return;
+    }
+    
     setLoadingAi(true);
     setAiInsight('');
     try {
       const prompt = `
-        You are Charles Darwin, FRS. You have received a psychological report from the HMS Beagle Marriage Division.
+        You are Charles Darwin, FRS. You have received a psychological report from the HMS Beagle Marriage Division evaluating Candidate ${activeCandidate.name}.
         Data Summary:
         - Commitment Calculus (Darwinian Utility): ${darwinUtility.toFixed(1)} (-10 to 10)
         - Compatibility Index: ${compatibility.toFixed(1)}%
         - Uncertainty Interval: ${monteCarlo.ciLower.toFixed(0)}% to ${monteCarlo.ciUpper.toFixed(0)}%
-        - Attachment Dynamics: ${state.myAttachment} - ${state.partnerAttachment}
-        - Gottman Risk Patterns: Contempt level ${state.horsemen.contempt}/10.
+        - Attachment Dynamics: ${state.myAttachment} - ${activeCandidate.partnerAttachment}
+        - Gottman Risk Patterns: Contempt level ${activeCandidate.horsemen.contempt}/10.
         - Strategic Decision: ${decisionVerdict.status}
         
-        Provide a "Scientific Naturalist" verdict with evolutionary perspective. 
+        Provide a "Scientific Naturalist" verdict with evolutionary perspective on this specific candidate. 
         Refer to the "Eight Pillars of Marital Stability" (Weights: Emotional Communication 25%, etc).
         Be rigorous, slightly eccentric, but analytically sharp. 
         Limit to 250 words.
@@ -143,6 +147,24 @@ export default function App() {
     } finally {
       setLoadingAi(false);
     }
+  };
+
+  const updateCandidateState = (path: string, val: any) => {
+    const parts = path.split('.');
+    setState(prev => {
+      const nextCands = prev.candidates.map(c => {
+        if (c.id !== prev.activeCandidateId) return c;
+        const nextC = { ...c };
+        let current: any = nextC;
+        for (let i = 0; i < parts.length - 1; i++) {
+          current[parts[i]] = { ...current[parts[i]] };
+          current = current[parts[i]];
+        }
+        current[parts[parts.length - 1]] = val;
+        return nextC;
+      });
+      return { ...prev, candidates: nextCands };
+    });
   };
 
   const updateNestedState = (path: string, val: any) => {
@@ -317,12 +339,47 @@ export default function App() {
                         <p className="font-mono text-xs uppercase tracking-[0.5em] opacity-40 italic">Psychometric Domain & Attachment Matrix</p>
                     </div>
 
+                    <div className="flex gap-4 items-center justify-center border-b border-sepia/10 pb-4">
+                        {state.candidates.map(cand => (
+                            <button 
+                                key={cand.id} 
+                                onClick={() => updateNestedState('activeCandidateId', cand.id)}
+                                className={`px-4 py-2 font-bold uppercase tracking-widest text-xs rounded transition-all ${
+                                    state.activeCandidateId === cand.id 
+                                        ? 'bg-sepia text-parchment shadow-md' 
+                                        : 'bg-white/40 border border-sepia/20 text-sepia hover:bg-sepia/10'
+                                }`}
+                            >
+                                {cand.name}
+                            </button>
+                        ))}
+                        <button 
+                            onClick={() => {
+                                const newId = `c${Date.now()}`;
+                                const newName = `Candidate ${String.fromCharCode(65 + state.candidates.length)}`;
+                                updateNestedState('candidates', [...state.candidates, createEmptyCandidate(newId, newName)]);
+                                updateNestedState('activeCandidateId', newId);
+                            }}
+                            className="px-4 py-2 bg-transparent text-sepia/50 hover:text-sepia uppercase tracking-widest text-xs font-bold transition-all border border-dashed border-sepia/30 rounded"
+                        >
+                            + Add Profile
+                        </button>
+                    </div>
+
                     <div className="grid lg:grid-cols-2 gap-12">
                         <div className="space-y-8">
                             <div className="scientific-card bg-white/50">
-                                <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
-                                    <Dna className="size-5 text-sepia" /> Domain Assessments (Self vs Partner)
-                                </h3>
+                                <div className="flex items-center justify-between mb-6">
+                                    <h3 className="text-lg font-bold flex items-center gap-2">
+                                        <Dna className="size-5 text-sepia" /> Domain Assessments
+                                    </h3>
+                                    <input 
+                                        type="text" 
+                                        value={activeCandidate.name} 
+                                        onChange={e => updateCandidateState('name', e.target.value)}
+                                        className="bg-transparent border-b border-sepia/30 font-bold focus:outline-none focus:border-sepia text-right w-48 text-sm"
+                                    />
+                                </div>
                                 <div className="space-y-8">
                                     {DOMAINS.map(d => (
                                         <div key={d.id} className="space-y-4">
@@ -332,12 +389,12 @@ export default function App() {
                                             </div>
                                             <div className="grid grid-cols-2 gap-6">
                                                 <div className="space-y-1">
-                                                    <label className="text-[9px] uppercase font-mono opacity-40">Self Rating</label>
+                                                    <label className="text-[9px] uppercase font-mono opacity-40">Self Rating (Global)</label>
                                                     <input type="range" min="0" max="10" value={state.selfRatings[d.id]} onChange={e => updateNestedState(`selfRatings.${d.id}`, parseInt(e.target.value))} className="w-full" />
                                                 </div>
                                                 <div className="space-y-1">
-                                                    <label className="text-[9px] uppercase font-mono opacity-40">Partner Rating</label>
-                                                    <input type="range" min="0" max="10" value={state.partnerRatings[d.id]} onChange={e => updateNestedState(`partnerRatings.${d.id}`, parseInt(e.target.value))} className="w-full" />
+                                                    <label className="text-[9px] uppercase font-mono opacity-40">{activeCandidate.name} Rating</label>
+                                                    <input type="range" min="0" max="10" value={activeCandidate.partnerRatings[d.id]} onChange={e => updateCandidateState(`partnerRatings.${d.id}`, parseInt(e.target.value))} className="w-full" />
                                                 </div>
                                             </div>
                                         </div>
@@ -353,18 +410,18 @@ export default function App() {
                                     <div className="space-y-2">
                                         <div className="flex justify-between text-xs font-mono">
                                             <span>Pos:Neg interaction Ratio</span>
-                                            <span className="font-bold">{state.interactionRatio}:1</span>
+                                            <span className="font-bold">{activeCandidate.interactionRatio}:1</span>
                                         </div>
-                                        <input type="range" min="0" max="20" step="0.5" value={state.interactionRatio} onChange={e => updateNestedState('interactionRatio', parseFloat(e.target.value))} className="w-full" />
+                                        <input type="range" min="0" max="20" step="0.5" value={activeCandidate.interactionRatio} onChange={e => updateCandidateState('interactionRatio', parseFloat(e.target.value))} className="w-full" />
                                         <p className="text-[10px] italic opacity-50">Gottman Baseline: 5:1 for stability, 1:1 for dissolution.</p>
                                     </div>
                                     <div className="grid grid-cols-2 gap-x-8 gap-y-6">
-                                        {Object.entries(state.horsemen).map(([key, val]) => (
+                                        {Object.entries(activeCandidate.horsemen).map(([key, val]) => (
                                             <div key={key} className="space-y-1">
                                                 <label className="text-[10px] uppercase font-mono opacity-60 flex justify-between">
                                                     {key} <span>{key === 'contempt' ? '2.5x weight' : ''}</span>
                                                 </label>
-                                                <input type="range" min="0" max="10" value={val} onChange={e => updateNestedState(`horsemen.${key}`, parseInt(e.target.value))} className="w-full accent-sepia" />
+                                                <input type="range" min="0" max="10" value={val as number} onChange={e => updateCandidateState(`horsemen.${key}`, parseInt(e.target.value))} className="w-full accent-sepia" />
                                             </div>
                                         ))}
                                     </div>
@@ -400,7 +457,7 @@ export default function App() {
                                     </div>
                                     <div className="space-y-2">
                                         <label className="text-[10px] uppercase font-mono opacity-50 block text-center">Their Style</label>
-                                        <select value={state.partnerAttachment} onChange={e => updateNestedState('partnerAttachment', e.target.value as any)} className="w-full bg-parchment border-none p-3 font-mono text-xs uppercase tracking-widest font-bold">
+                                        <select value={activeCandidate.partnerAttachment} onChange={e => updateCandidateState('partnerAttachment', e.target.value as any)} className="w-full bg-parchment border-none p-3 font-mono text-xs uppercase tracking-widest font-bold">
                                             <option value="secure">Secure</option>
                                             <option value="anxious">Anxious</option>
                                             <option value="avoidant">Avoidant</option>
@@ -409,7 +466,7 @@ export default function App() {
                                     </div>
                                 </div>
                                 <div className="mt-8 pt-6 border-t border-sepia/5 text-center">
-                                    <p className="text-xs italic opacity-60">"Pairing Score: {ATTACH_MATRIX[state.myAttachment][state.partnerAttachment]}/10 Factors into base compatibility."</p>
+                                    <p className="text-xs italic opacity-60">"Pairing Score: {ATTACH_MATRIX[state.myAttachment][activeCandidate.partnerAttachment]}/10 Factors into base compatibility."</p>
                                 </div>
                             </div>
                         </div>
@@ -419,9 +476,27 @@ export default function App() {
 
             {activeTab === 'results' && (
                 <motion.div key="results" initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }} className="space-y-12 pb-32">
+                    
+                    <div className="flex gap-4 items-center justify-center border-b border-sepia/10 pb-4 mb-8">
+                        <span className="text-[10px] uppercase font-mono opacity-50">Evaluating:</span>
+                        {state.candidates.map(cand => (
+                            <button 
+                                key={cand.id} 
+                                onClick={() => updateNestedState('activeCandidateId', cand.id)}
+                                className={`px-4 py-2 font-bold uppercase tracking-widest text-xs rounded transition-all ${
+                                    state.activeCandidateId === cand.id 
+                                        ? 'bg-sepia text-parchment shadow-md' 
+                                        : 'bg-white/40 border border-sepia/20 text-sepia hover:bg-sepia/10'
+                                }`}
+                            >
+                                {cand.name}
+                            </button>
+                        ))}
+                    </div>
+
                     <div className="grid md:grid-cols-3 gap-8">
                         <div className="scientific-card border-none bg-sepia text-parchment p-12 flex flex-col items-center justify-center text-center col-span-2">
-                            <h3 className="font-mono text-[10px] uppercase tracking-[0.4em] mb-6 opacity-60">Final Stability Index</h3>
+                            <h3 className="font-mono text-[10px] uppercase tracking-[0.4em] mb-6 opacity-60">Final Stability Index for {activeCandidate.name}</h3>
                             <div className="text-9xl font-black mb-4 tracking-tighter">{compatibility.toFixed(0)}</div>
                             <div className={`text-2xl font-black uppercase tracking-widest py-2 px-6 border-2 mb-6 ${decisionVerdict.status === 'PROCEED' ? 'border-emerald-400 bg-emerald-400/10' : decisionVerdict.status === 'CAUTION' ? 'border-amber-400 bg-amber-400/10' : 'border-red-400 bg-red-400/10'}`}>
                                 {decisionVerdict.status}
@@ -469,9 +544,9 @@ export default function App() {
                             <h3 className="text-lg font-bold mb-8 flex items-center gap-3 uppercase tracking-tighter"><AlertTriangle className="size-5 text-red-700" /> Longitudinal Risk Flags</h3>
                             {RISK_FACTORS.map(r => (
                                 <button key={r.id} onClick={() => {
-                                    const next = state.activeRisks.includes(r.id) ? state.activeRisks.filter(id => id !== r.id) : [...state.activeRisks, r.id];
-                                    updateNestedState('activeRisks', next);
-                                }} className={`w-full text-left p-4 rounded-sm border mb-3 transition-all flex items-center gap-4 ${state.activeRisks.includes(r.id) ? (r.level === 'red' ? 'bg-red-100 border-red-300' : 'bg-amber-100 border-amber-300') : 'bg-white/40 border-sepia/10 opacity-60'}`}>
+                                    const next = activeCandidate.activeRisks.includes(r.id) ? activeCandidate.activeRisks.filter(id => id !== r.id) : [...activeCandidate.activeRisks, r.id];
+                                    updateCandidateState('activeRisks', next);
+                                }} className={`w-full text-left p-4 rounded-sm border mb-3 transition-all flex items-center gap-4 ${activeCandidate.activeRisks.includes(r.id) ? (r.level === 'red' ? 'bg-red-100 border-red-300' : 'bg-amber-100 border-amber-300') : 'bg-white/40 border-sepia/10 opacity-60'}`}>
                                     <div className={`size-3 rounded-full ${r.level === 'red' ? 'bg-red-600' : 'bg-amber-600'}`}></div>
                                     <span className="grow font-bold text-sm tracking-tight">{r.text}</span>
                                     <span className="text-[10px] font-mono opacity-50">{r.weight} Pts</span>
@@ -508,6 +583,24 @@ export default function App() {
                           )}
                         </div>
                       )}
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-center justify-center gap-6 mt-16 pt-8 border-t border-sepia/10">
+                        <button 
+                            onClick={() => window.print()}
+                            className="bg-white border border-sepia/20 text-sepia px-8 py-4 font-bold uppercase tracking-widest text-xs flex items-center gap-3 hover:bg-sepia/5 transition-all shadow-sm rounded-sm"
+                        >
+                            <ScrollText className="size-4" /> Download Report
+                        </button>
+                        <button 
+                            onClick={() => {
+                                localStorage.removeItem('scientific-marriage-engine');
+                                window.location.reload();
+                            }}
+                            className="bg-transparent text-sepia/50 hover:text-sepia px-8 py-4 font-bold uppercase tracking-widest text-xs flex items-center gap-3 transition-all"
+                        >
+                            <RefreshCcw className="size-4" /> Reset Laboratory
+                        </button>
                     </div>
                 </motion.div>
             )}
